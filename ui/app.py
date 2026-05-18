@@ -1,13 +1,17 @@
 """
 QuantScanner - A股量化信号扫描器
 主页面：因子选配 + 信号扫描 + 结果展示
-v0.2: 多元组合因子 + 美化UI + 扫描修复
+v0.2.2: 双数据源自动降级 + 美化UI + 扫描修复
 """
 
 import json
 import sys
 import os
 from datetime import datetime
+
+# 在任何网络请求之前清除代理（Clash TUN会拦截东方财富API）
+for _key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+    os.environ.pop(_key, None)
 
 import streamlit as st
 import pandas as pd
@@ -152,13 +156,16 @@ st.set_page_config(
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ========== 初始化 ==========
+# 版本号：修改代码后递增此值，强制 Streamlit 重建缓存
+_CACHE_VERSION = "v0.2.2"
+
 @st.cache_resource
-def init_system():
+def init_system(_version: str = ""):
     init_db()
     loaded = discover_factors()
     return SignalScanner(), loaded
 
-scanner, loaded_factors = init_system()
+scanner, loaded_factors = init_system(_version=_CACHE_VERSION)
 
 # ========== 侧边栏：因子选配 ==========
 with st.sidebar:
