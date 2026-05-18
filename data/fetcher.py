@@ -3,6 +3,7 @@
 全A股行情、资金流向、板块数据
 """
 
+import os
 import time
 from datetime import datetime
 
@@ -11,11 +12,49 @@ import pandas as pd
 
 from data.cache import save_daily_kline, load_daily_kline, get_last_trade_date, get_connection, init_db
 
+# ========== 代理处理 ==========
+# akshare请求东方财富API需直连，Clash代理会拦截
+# 在模块加载时就清除代理，因为akshare内部requests会读取环境变量
+_ORIG_PROXY = {}
+
+# 启动时自动清除代理
+for _key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+    _val = os.environ.get(_key)
+    if _val:
+        _ORIG_PROXY[_key] = _val
+        del os.environ[_key]
+
+
+def _disable_proxy():
+    """确保代理已禁用"""
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        val = os.environ.get(key)
+        if val:
+            _ORIG_PROXY[key] = val
+            os.environ.pop(key, None)
+    """临时禁用代理（akshare需要直连东方财富）"""
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        val = os.environ.get(key)
+        if val:
+            _ORIG_PROXY[key] = val
+            os.environ.pop(key, None)
+
+
+def _restore_proxy():
+    """恢复代理"""
+    for key, val in _ORIG_PROXY.items():
+        os.environ[key] = val
+    _ORIG_PROXY.clear()
+
 
 def fetch_realtime_quotes() -> pd.DataFrame:
     """获取A股全市场实时行情"""
     try:
+        _disable_proxy()
         df = ak.stock_zh_a_spot_em()
+        _restore_proxy()
+        if df is None or df.empty:
+            return pd.DataFrame()
         # 标准化列名
         rename_map = {
             "代码": "stock_code",
@@ -34,10 +73,20 @@ def fetch_realtime_quotes() -> pd.DataFrame:
             "换手率": "turnover_rate",
             "市盈率-动态": "pe_ttm",
             "市净率": "pb",
+            "60日涨跌幅": "change_pct_60d",
+            "年初至今涨跌幅": "change_pct_ytd",
         }
-        df = df.rename(columns=rename_map)
+        # 只重命名存在的列
+        existing = {k: v for k, v in rename_map.items() if k in df.columns}
+        df = df.rename(columns=existing)
+
+        # 确保stock_code是字符串
+        if "stock_code" in df.columns:
+            df["stock_code"] = df["stock_code"].astype(str)
+
         return df
     except Exception as e:
+        _restore_proxy()
         print(f"[ERROR] 获取实时行情失败: {e}")
         return pd.DataFrame()
 
@@ -55,6 +104,7 @@ def fetch_daily_kline(stock_code: str, period: int = 120, use_cache: bool = True
             return cached.tail(period)
 
     try:
+        _disable_proxy()
         df = ak.stock_zh_a_hist(
             symbol=stock_code,
             period="daily",
@@ -62,10 +112,12 @@ def fetch_daily_kline(stock_code: str, period: int = 120, use_cache: bool = True
             end_date=datetime.now().strftime("%Y%m%d"),
             adjust="qfq"
         )
+        _restore_proxy()
         if not df.empty:
             save_daily_kline(stock_code, df)
         return df.tail(period) if not df.empty else df
     except Exception as e:
+        _restore_proxy()
         print(f"[ERROR] 获取 {stock_code} 日K线失败: {e}")
         if use_cache:
             return load_daily_kline(stock_code, days=period)
@@ -75,7 +127,10 @@ def fetch_daily_kline(stock_code: str, period: int = 120, use_cache: bool = True
 def fetch_capital_flow(stock_code: str) -> dict:
     """获取个股资金流向"""
     try:
-        df = ak.stock_individual_fund_flow(stock=stock_code, market="sh" if stock_code.startswith("6") else "sz")
+        _disable_proxy()
+        market = "sh" if stock_code.startswith("6") else "sz"
+        df = ak.stock_individual_fund_flow(stock=stock_code, market=market)
+        _restore_proxy()
         if df is not None and not df.empty:
             latest = df.iloc[-1]
             return {
@@ -84,6 +139,7 @@ def fetch_capital_flow(stock_code: str) -> dict:
                 "net_inflow_medium": float(latest.get("大单净流入-净额", latest.get("大单净流入", 0))),
             }
     except Exception as e:
+        _restore_proxy()
         print(f"[WARN] 获取 {stock_code} 资金流向失败: {e}")
     return {}
 
@@ -91,7 +147,9 @@ def fetch_capital_flow(stock_code: str) -> dict:
 def fetch_sector_changes() -> pd.DataFrame:
     """获取板块涨跌幅"""
     try:
+        _disable_proxy()
         df = ak.stock_board_industry_name_em()
+        _restore_proxy()
         if df is not None and not df.empty:
             rename_map = {
                 "板块名称": "sector_name",
@@ -101,21 +159,67 @@ def fetch_sector_changes() -> pd.DataFrame:
                 "上涨家数": "up_count",
                 "下跌家数": "down_count",
             }
-            df = df.rename(columns=rename_map)
+            existing = {k: v for k, v in rename_map.items() if k in df.columns}
+            df = df.rename(columns=existing)
             return df
     except Exception as e:
+        _restore_proxy()
         print(f"[WARN] 获取板块数据失败: {e}")
     return pd.DataFrame()
+
+
+def fetch_stock_sector_map() -> pd.DataFrame:
+    """获取个股-板块映射关系"""
+    try:
+        _disable_proxy()
+        # 获取东方财富行业板块成分股
+        boards = ak.stock_board_industry_name_em()
+        if boards is None or boards.empty:
+            return pd.DataFrame()
+
+        mapping = []
+        board_col = "板块名称" if "板块名称" in boards.columns else None
+        if board_col is None:
+            return pd.DataFrame()
+
+        # 只取前20个板块（避免请求太多）
+        for _, board_row in boards.head(20).iterrows():
+            board_name = board_row[board_col]
+            try:
+                members = ak.stock_board_industry_cons_em(symbol=board_name)
+                if members is not None and not members.empty:
+                    code_col = "代码" if "代码" in members.columns else None
+                    if code_col:
+                        for _, m in members.iterrows():
+                            mapping.append({
+                                "stock_code": str(m[code_col]),
+                                "sector_name": board_name,
+                            })
+                time.sleep(0.2)
+            except Exception:
+                continue
+
+        _restore_proxy()
+        return pd.DataFrame(mapping)
+    except Exception as e:
+        _restore_proxy()
+        print(f"[WARN] 获取板块映射失败: {e}")
+        return pd.DataFrame()
 
 
 def fetch_stock_list() -> pd.DataFrame:
     """获取A股股票列表"""
     try:
+        _disable_proxy()
         df = ak.stock_zh_a_spot_em()
+        _restore_proxy()
         if df is not None and not df.empty:
-            result = df[["代码", "名称"]].rename(columns={"代码": "stock_code", "名称": "stock_name"})
+            code_col = "代码" if "代码" in df.columns else "stock_code"
+            name_col = "名称" if "名称" in df.columns else "stock_name"
+            result = df[[code_col, name_col]].rename(columns={code_col: "stock_code", name_col: "stock_name"})
             return result
     except Exception as e:
+        _restore_proxy()
         print(f"[ERROR] 获取股票列表失败: {e}")
     return pd.DataFrame()
 
@@ -135,26 +239,3 @@ def batch_fetch_daily_kline(stock_codes: list[str], period: int = 60, delay: flo
         time.sleep(delay)
     print(f"\n[数据] 完成，成功 {len(results)}/{total}")
     return results
-
-
-if __name__ == "__main__":
-    init_db()
-    print("=== 测试数据获取 ===")
-
-    # 测试实时行情
-    print("\n1. 实时行情（前5只）:")
-    rt = fetch_realtime_quotes()
-    if not rt.empty:
-        print(rt[["stock_code", "stock_name", "price", "change_pct"]].head())
-
-    # 测试日K线
-    print("\n2. 茅台日K线:")
-    kline = fetch_daily_kline("600519", period=10)
-    if not kline.empty:
-        print(kline.tail(3))
-
-    # 测试板块
-    print("\n3. 板块涨跌（前5）:")
-    sectors = fetch_sector_changes()
-    if not sectors.empty:
-        print(sectors.head())
