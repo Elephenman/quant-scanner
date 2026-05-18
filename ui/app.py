@@ -164,18 +164,19 @@ st.set_page_config(
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ========== 初始化 ==========
-# 版本号：修改代码后递增此值，强制 Streamlit 重建缓存
-_CACHE_VERSION = "v0.3.1"
-
+# 只缓存 init_db（纯副作用、幂等），因子发现必须每次都执行
+# 原因：sys.modules强制清除后FactorRegistry是新类，_factors={}
+# 如果@st.cache_resource跳过discover_factors()，因子就全没了
 @st.cache_resource
-def _init_shared(_version: str = ""):
-    """缓存数据库和因子发现（这些是无状态的全局资源）"""
+def _init_db():
     init_db()
-    loaded = discover_factors()
-    return loaded
+
+_init_db()
+
+# 每次都执行因子发现（副作用：往FactorRegistry._factors注册）
+discover_factors()
 
 # 每次都重新创建scanner实例，避免缓存旧类导致方法签名不匹配
-loaded_factors = _init_shared(_version=_CACHE_VERSION)
 scanner = SignalScanner()
 
 # ========== 侧边栏：因子选配 ==========
