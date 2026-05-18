@@ -80,16 +80,12 @@ def init_db():
 
 
 def save_daily_kline(stock_code: str, df: pd.DataFrame):
-    """保存日K线数据"""
+    """保存日K线数据（批量写入）"""
     if df is None or df.empty:
         return
-    conn = get_connection()
+    rows = []
     for _, row in df.iterrows():
-        conn.execute("""
-            INSERT OR REPLACE INTO daily_kline
-            (stock_code, trade_date, open, high, low, close, volume, turnover, change_pct)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
+        rows.append((
             stock_code,
             str(row.get("日期", row.get("trade_date", ""))),
             float(row.get("开盘", row.get("open", 0))),
@@ -100,6 +96,12 @@ def save_daily_kline(stock_code: str, df: pd.DataFrame):
             float(row.get("成交额", row.get("turnover", 0))),
             float(row.get("涨跌幅", row.get("change_pct", 0))),
         ))
+    conn = get_connection()
+    conn.executemany("""
+        INSERT OR REPLACE INTO daily_kline
+        (stock_code, trade_date, open, high, low, close, volume, turnover, change_pct)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, rows)
     conn.commit()
     conn.close()
 

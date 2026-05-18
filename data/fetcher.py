@@ -233,63 +233,36 @@ def _qq_fetch_kline(stock_code: str, period: int = 120) -> pd.DataFrame:
 # ========== 公共接口（自动降级） ==========
 
 def fetch_realtime_quotes() -> pd.DataFrame:
-    """获取A股全市场实时行情，三级降级：东方财富 → 新浪 → 腾讯"""
+    """获取A股全市场实时行情，二级降级：东方财富 → 腾讯（新浪已废弃）"""
     # 1. 尝试东方财富
-    try:
-        _clear_proxy()
-        import akshare as ak
-        df = ak.stock_zh_a_spot_em()
-        _restore_proxy()
-        if df is not None and not df.empty:
-            _datasource_status["em"] = True
-            rename_map = {
-                "代码": "stock_code", "名称": "stock_name", "最新价": "price",
-                "涨跌幅": "change_pct", "涨跌额": "change_amount",
-                "成交量": "volume", "成交额": "turnover", "振幅": "amplitude",
-                "最高": "high", "最低": "low", "今开": "open", "昨收": "prev_close",
-                "量比": "vol_ratio", "换手率": "turnover_rate",
-                "市盈率-动态": "pe_ttm", "市净率": "pb",
-            }
-            existing = {k: v for k, v in rename_map.items() if k in df.columns}
-            df = df.rename(columns=existing)
-            if "stock_code" in df.columns:
-                df["stock_code"] = df["stock_code"].astype(str)
-            return df
-    except Exception as e:
-        _restore_proxy()
-        _datasource_status["em"] = False
-        print(f"[WARN] 东方财富实时行情失败: {e}")
+    if _datasource_status["em"] is not False:  # None或True都试
+        try:
+            _clear_proxy()
+            import akshare as ak
+            df = ak.stock_zh_a_spot_em()
+            _restore_proxy()
+            if df is not None and not df.empty:
+                _datasource_status["em"] = True
+                rename_map = {
+                    "代码": "stock_code", "名称": "stock_name", "最新价": "price",
+                    "涨跌幅": "change_pct", "涨跌额": "change_amount",
+                    "成交量": "volume", "成交额": "turnover", "振幅": "amplitude",
+                    "最高": "high", "最低": "low", "今开": "open", "昨收": "prev_close",
+                    "量比": "vol_ratio", "换手率": "turnover_rate",
+                    "市盈率-动态": "pe_ttm", "市净率": "pb",
+                }
+                existing = {k: v for k, v in rename_map.items() if k in df.columns}
+                df = df.rename(columns=existing)
+                if "stock_code" in df.columns:
+                    df["stock_code"] = df["stock_code"].astype(str)
+                print(f"[数据源] 东方财富获取 {len(df)} 只股票行情")
+                return df
+        except Exception as e:
+            _restore_proxy()
+            _datasource_status["em"] = False
+            print(f"[WARN] 东方财富实时行情失败: {e}")
 
-    # 2. 降级到新浪接口
-    print("[数据源] 降级到新浪财经获取实时行情...")
-    try:
-        _clear_proxy()
-        import akshare as ak
-        df = ak.stock_zh_a_spot()
-        _restore_proxy()
-        if df is not None and not df.empty:
-            _datasource_status["sina"] = True
-            rename_map = {
-                "代码": "stock_code", "名称": "stock_name", "最新价": "price",
-                "涨跌幅": "change_pct", "涨跌额": "change_amount",
-                "成交量": "volume", "成交额": "turnover",
-                "最高": "high", "最低": "low", "今开": "open", "昨收": "prev_close",
-            }
-            existing = {k: v for k, v in rename_map.items() if k in df.columns}
-            df = df.rename(columns=existing)
-            if "stock_code" in df.columns:
-                df["stock_code"] = df["stock_code"].astype(str)
-            # 新浪接口缺少的字段补默认值
-            for col, default in [("amplitude", 0), ("turnover_rate", 0), ("vol_ratio", 0)]:
-                if col not in df.columns:
-                    df[col] = default
-            print(f"[数据源] 新浪财经获取 {len(df)} 只股票行情")
-            return df
-    except Exception as e:
-        _restore_proxy()
-        print(f"[WARN] 新浪实时行情失败: {e}")
-
-    # 3. 最终降级到腾讯接口（逐批查询）
+    # 2. 降级到腾讯接口（代码段范围批量扫描，不依赖第三方列表）
     print("[数据源] 降级到腾讯财经获取实时行情...")
     try:
         return _qq_fetch_all_realtime()
@@ -299,60 +272,46 @@ def fetch_realtime_quotes() -> pd.DataFrame:
 
 
 def _qq_fetch_all_realtime() -> pd.DataFrame:
-    """通过腾讯接口获取全市场A股实时行情（分页拉取）"""
+    """通过腾讯接口获取全市场A股实时行情（代码段范围批量扫描）"""
     all_rows = []
 
-    # 获取股票列表：优先新浪，再缓存，最后代码段遍历
-    codes = []
-    try:
-        _clear_proxy()
-        import akshare as ak
-        stock_list = ak.stock_zh_a_spot()
-        _restore_proxy()
-        if stock_list is not None and not stock_list.empty:
-            code_col = "代码" if "代码" in stock_list.columns else "stock_code"
-            codes = stock_list[code_col].astype(str).tolist()
-    except Exception:
-        _restore_proxy()
+    # 生成代码段范围：沪市60/68 + 深市00/30 + 中小板002
+    # 不依赖第三方获取股票列表，直接用腾讯批量查询探测有效代码
+    code_ranges = [
+        ("sh", 600000, 603000),   # 沪市主板
+        ("sh", 603000, 605999),   # 沪市主板续
+        ("sh", 688000, 689000),   # 科创板
+        ("sz", 0, 3000),          # 深市主板
+        ("sz", 300000, 301000),   # 创业板
+        ("sz", 2000, 2500),       # 中小板
+    ]
 
-    if not codes:
-        try:
-            conn = get_connection()
-            codes_df = pd.read_sql_query(
-                "SELECT DISTINCT stock_code FROM daily_kline LIMIT 2000",
-                conn
-            )
-            conn.close()
-            codes = codes_df["stock_code"].tolist()
-        except Exception:
-            pass
+    batch_size = 50  # 腾讯每批最多50个
+    max_batches_per_range = 20  # 每个范围最多扫20批(1000个代码)
+    delay = 0.05  # 请求间隔
 
-    if not codes:
-        # 最终方案：用代码段范围生成（沪市60xxxx + 深市00xxxx + 创业板30xxxx）
-        for prefix in ("60", "00", "30"):
-            for i in range(0, 3000):
-                codes.append(f"{prefix}{i:04d}")
-
-    # 腾讯接口批量查（每批最多50个）
-    batch_size = 50
-    max_stocks = 2000  # 覆盖主要活跃股
-    for i in range(0, min(len(codes), max_stocks), batch_size):
-        batch = codes[i:i + batch_size]
-        qq_codes = ",".join(_qq_code_prefix(c) for c in batch)
-        try:
-            r = requests.get(f"http://qt.gtimg.cn/q={qq_codes}", timeout=10)
-            df = _qq_parse_realtime(r.text)
-            if not df.empty:
-                all_rows.append(df)
-        except Exception:
-            continue
-        time.sleep(0.1)
+    for prefix, start, end in code_ranges:
+        range_codes = [f"{prefix}{start + i}" for i in range(0, min(end - start, max_batches_per_range * batch_size))]
+        for i in range(0, len(range_codes), batch_size):
+            batch = range_codes[i:i + batch_size]
+            qq_codes = ",".join(batch)
+            try:
+                r = requests.get(f"http://qt.gtimg.cn/q={qq_codes}", timeout=10)
+                df = _qq_parse_realtime(r.text)
+                if not df.empty:
+                    all_rows.append(df)
+            except Exception:
+                continue
+            time.sleep(delay)
 
     if not all_rows:
         return pd.DataFrame()
 
     _datasource_status["qq"] = True
     result = pd.concat(all_rows, ignore_index=True)
+    # 去重（代码可能重叠）
+    if "stock_code" in result.columns:
+        result = result.drop_duplicates(subset=["stock_code"], keep="first")
     print(f"[数据源] 腾讯财经获取 {len(result)} 只股票行情")
     return result
 
@@ -413,6 +372,9 @@ def fetch_daily_kline(stock_code: str, period: int = 120, use_cache: bool = True
 
 def fetch_capital_flow(stock_code: str) -> dict:
     """获取个股资金流向（东方财富独有，失败返回空）"""
+    # 东方财富已知不可用时直接跳过，避免每只股票都超时
+    if _datasource_status.get("em") is False:
+        return {}
     try:
         _clear_proxy()
         import akshare as ak
@@ -428,12 +390,15 @@ def fetch_capital_flow(stock_code: str) -> dict:
             }
     except Exception as e:
         _restore_proxy()
-        print(f"[WARN] 资金流向 {stock_code} 失败: {e}")
+        _datasource_status["em"] = False
+        # 首次失败后静默，避免刷屏
     return {}
 
 
 def fetch_sector_changes() -> pd.DataFrame:
     """获取板块涨跌幅（东方财富独有，失败返回空）"""
+    if _datasource_status.get("em") is False:
+        return pd.DataFrame()
     try:
         _clear_proxy()
         import akshare as ak
@@ -450,12 +415,15 @@ def fetch_sector_changes() -> pd.DataFrame:
             return df
     except Exception as e:
         _restore_proxy()
+        _datasource_status["em"] = False
         print(f"[WARN] 板块数据失败: {e}")
     return pd.DataFrame()
 
 
 def fetch_stock_sector_map() -> pd.DataFrame:
     """获取个股-板块映射（东方财富独有，失败返回空）"""
+    if _datasource_status.get("em") is False:
+        return pd.DataFrame()
     try:
         _clear_proxy()
         import akshare as ak

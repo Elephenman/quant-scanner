@@ -32,10 +32,18 @@ class SMAFactor(FactorBase):
         if pd.isna(value):
             return 0.0, score_to_signal(0.0), "数据不足"
 
-        # 用股价的2%作为归一化基准，避免原公式小值几乎为0大值直跳满
-        # value = SMA_short - SMA_long，相对于股价做归一化
-        norm = max(abs(value), 1e-6)
-        score = (value / (norm + 1.0)) * 2.0  # 值越大分数越高，但压制极端值
+        # 用softsign归一化：score = x / (1 + |x|)
+        # x = 价差/股价 * 放大系数，使3%偏离→score≈0.5, 5%→0.7
+        # 需要从calculate传入股价，这里用kwargs兜底
+        price = kwargs.get("close_price", None)
+        if price and price > 0:
+            pct_diff = value / price  # 相对价差，如0.03=3%
+            x = pct_diff * 50  # 放大：3%→1.5, 5%→2.5
+        else:
+            # 无股价时用绝对值softsign
+            x = value * 0.5
+
+        score = x / (1.0 + abs(x))
         score = max(-1.0, min(1.0, score))
 
         if value > 0:

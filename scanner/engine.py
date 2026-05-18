@@ -124,6 +124,17 @@ class SignalScanner:
 
         # 5. 逐股票计算
         results: list[SignalResult] = []
+
+        # 按成交额/换手率排序，优先扫活跃股
+        sort_col = None
+        for col_candidate in ["turnover", "turnover_rate", "volume"]:
+            if col_candidate in filtered.columns:
+                sort_col = col_candidate
+                break
+        if sort_col:
+            filtered[sort_col] = pd.to_numeric(filtered[sort_col], errors="coerce").fillna(0)
+            filtered = filtered.sort_values(sort_col, ascending=False)
+
         scan_list = filtered.head(top_n)
         total = len(scan_list)
 
@@ -250,7 +261,11 @@ class SignalScanner:
             weight = config.get("weight", factor.default_weight)
             params = config.get("params", {})
 
-            result = factor.run(df, stock_code, stock_name, **params)
+            # 传入最新收盘价供因子归一化使用
+            params_with_price = dict(params)
+            params_with_price["close_price"] = float(df["close"].iloc[-1]) if not df.empty else 0
+
+            result = factor.run(df, stock_code, stock_name, **params_with_price)
             if result is not None:
                 factor_results.append(result)
                 total_weighted_score += result.score * weight
