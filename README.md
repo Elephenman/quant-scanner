@@ -11,26 +11,62 @@
 ## 快速开始
 
 ```bash
-# 1. 激活虚拟环境
-cd A:/Dev/github/quant-scanner
-venv\Scripts\activate
+# 1. 克隆仓库
+git clone https://github.com/Elephenman/quant-scanner.git
+cd quant-scanner
 
-# 2. 启动
-streamlit run ui/app.py
+# 2. 创建虚拟环境并安装依赖
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+# 3. 启动
+streamlit run ui/app.py --server.headless true
+```
+
+## 项目结构
+
+```
+quant-scanner/
+├── factors/              # 因子插件目录（新增因子放这里）
+│   ├── base.py           # FactorBase 抽象基类 + FactorRegistry
+│   ├── loader.py         # 自动发现并注册因子
+│   ├── sma_cross.py      # SMA金叉死叉
+│   ├── macd.py           # MACD金叉死叉
+│   ├── rsi.py            # RSI超买超卖
+│   ├── volume_break.py   # 放量突破
+│   ├── change_amplitude.py # 涨跌幅振幅
+│   ├── capital_flow.py   # 主力资金流入流出
+│   ├── auction.py        # 集合竞价异动
+│   └── sector.py         # 板块预期涨幅
+├── data/                 # 数据层
+│   ├── fetcher.py        # akshare 数据获取
+│   └── cache.py          # SQLite 本地缓存
+├── scanner/              # 扫描引擎
+│   ├── engine.py         # 信号扫描 + 评分
+│   └── scheduler.py      # APScheduler 定时扫描
+├── ui/                   # Streamlit 界面
+│   └── app.py            # 主页面
+├── main.py               # CLI 入口
+└── requirements.txt
 ```
 
 ## 因子列表（持续扩展中）
 
-| 因子 | 分类 | 说明 |
-|------|------|------|
-| SMA金叉死叉 | 技术面 | 短期均线上穿/下穿长期均线 |
-| MACD金叉死叉 | 技术面 | DIF上穿/下穿DEA |
-| RSI超买超卖 | 技术面 | RSI<30超卖看反弹，>70超买看回调 |
-| 放量突破 | 量价面 | 成交量放大+价格突破 |
-| 涨跌幅振幅 | 量价面 | 大阳线/大阴线判断 |
-| 主力资金流入流出 | 资金面 | 大单净流入/流出 |
-| 集合竞价异动 | 竞价面 | 高开/低开幅度 |
-| 板块预期涨幅 | 板块面 | 所属板块当日涨跌 |
+| 因子 | 分类 | 默认权重 | 说明 |
+|------|------|---------|------|
+| 主力资金流入流出 | 资金面 | **1.5** | 大单净流入/流出（超短线最核心） |
+| 集合竞价异动 | 竞价面 | **1.3** | 高开/低开幅度 |
+| SMA金叉死叉 | 技术面 | 1.0 | 短期均线上穿/下穿长期均线 |
+| MACD金叉死叉 | 技术面 | 1.0 | DIF上穿/下穿DEA |
+| 放量突破 | 量价面 | 1.2 | 成交量放大+价格突破 |
+| 板块预期涨幅 | 板块面 | 1.0 | 所属板块当日涨跌 |
+| RSI超买超卖 | 技术面 | 0.8 | RSI<30超卖看反弹，>70超买看回调 |
+| 涨跌幅振幅 | 量价面 | 0.8 | 大阳线/大阴线判断 |
 
 ## 新增因子
 
@@ -62,13 +98,30 @@ class MyFactor(FactorBase):
 
 重启 Streamlit 即可自动加载。
 
+## 信号评分机制
+
+1. 每个因子计算原始值 → 映射为 [-1.0, 1.0] 评分
+2. 加权汇总：`total_score = Σ(weight_i × score_i) / Σ(weight_i)`
+3. 映射为信号：
+   - `score ≥ 0.6` → 🟢 强买
+   - `0.3 ≤ score < 0.6` → 🟡 买
+   - `-0.3 < score < 0.3` → ⚪ 观察
+   - `-0.6 < score ≤ -0.3` → 🟠 卖
+   - `score ≤ -0.6` → 🔴 强卖
+
+## 资金约束适配
+
+- 1万本金 → 单仓位 ≤50%，止损5%
+- 聚焦 10-30 元股价区间
+- T+1 限制下做超短线（今买明卖）
+
 ## 技术栈
 
 - Python 3.12 + Streamlit
-- akshare（A股数据源）
+- akshare（A股免费数据源）
 - SQLite（本地缓存）
-- APScheduler（定时扫描，v0.2）
-- Plotly（图表，v0.2）
+- APScheduler（定时扫描）
+- Plotly（图表可视化）
 
 ## 免责声明
 

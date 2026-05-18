@@ -1,0 +1,6 @@
+streamlit>=1.56.0
+akshare>=1.17.26
+pandas>=2.2.3
+numpy>=2.2.5
+plotly>=6.6.0
+apscheduler>=3.10.0
