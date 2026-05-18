@@ -37,9 +37,10 @@ class MACDFactor(FactorBase):
         if pd.isna(value):
             return 0.0, score_to_signal(0.0), "数据不足"
 
-        # 柱状图 > 0 = 多头, < 0 = 空头
-        # 值越大越看多
-        score = max(-1.0, min(1.0, value / (abs(value) + 0.01) * min(abs(value) / 1.0, 1.0)))
+        # MACD柱状图归一化：用tanh-like函数，避免原公式的阶梯效应
+        # value范围通常在 -1~1 之间（已经过 *2），用softsign归一化
+        score = value / (1.0 + abs(value))
+        score = max(-1.0, min(1.0, score))
 
         if value > 0:
             detail = f"MACD柱状图正值，多头区域，值={value:.4f}"

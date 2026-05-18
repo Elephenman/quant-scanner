@@ -2,10 +2,11 @@
 信号扫描引擎
 核心逻辑：选因子 → 跑全市场 → 打分排序 → 输出信号
 支持实时行情扫描 + 历史K线回退扫描
+v0.3.0: 修复progress_callback兼容性 + 评分归一化改进
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -57,7 +58,7 @@ class SignalScanner:
         min_change: float = -9.0,
         max_change: float = 9.0,
         top_n: int = 50,
-        progress_callback=None,
+        progress_callback: Callable | None = None,
     ) -> list[SignalResult]:
         """
         全市场扫描
@@ -167,7 +168,8 @@ class SignalScanner:
             # 取最近有数据的股票
             df = pd.read_sql_query("""
                 SELECT stock_code, MAX(trade_date) as last_date,
-                       AVG(close) as price, AVG(change_pct) as change_pct
+                       AVG(close) as price,
+                       COALESCE(AVG(change_pct), 0) as change_pct
                 FROM daily_kline
                 WHERE trade_date >= date('now', '-7 days')
                 GROUP BY stock_code
@@ -294,7 +296,7 @@ class SignalScanner:
         self,
         stock_codes: list[str],
         selected_factors: dict[str, dict] | None = None,
-        progress_callback=None,
+        progress_callback: Callable | None = None,
     ) -> list[SignalResult]:
         """扫描自选股列表"""
         self._ensure_factors()

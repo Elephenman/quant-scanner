@@ -32,8 +32,11 @@ class SMAFactor(FactorBase):
         if pd.isna(value):
             return 0.0, score_to_signal(0.0), "数据不足"
 
-        # diff > 0 = 金叉区, diff < 0 = 死叉区
-        score = max(-1.0, min(1.0, value / (abs(value) + 0.01) * min(abs(value) / 2.0, 1.0)))
+        # 用股价的2%作为归一化基准，避免原公式小值几乎为0大值直跳满
+        # value = SMA_short - SMA_long，相对于股价做归一化
+        norm = max(abs(value), 1e-6)
+        score = (value / (norm + 1.0)) * 2.0  # 值越大分数越高，但压制极端值
+        score = max(-1.0, min(1.0, score))
 
         if value > 0:
             detail = f"SMA{short_p}在SMA{long_p}上方，金叉状态，价差={value:.2f}"

@@ -157,13 +157,17 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ========== 初始化 ==========
 # 版本号：修改代码后递增此值，强制 Streamlit 重建缓存
-_CACHE_VERSION = "v0.2.2"
+_CACHE_VERSION = "v0.3.0"
 
-@st.cache_resource
-def init_system(_version: str = ""):
+def _create_scanner():
+    """创建新的扫描器实例（确保每次代码更新都拿到最新类）"""
     init_db()
     loaded = discover_factors()
     return SignalScanner(), loaded
+
+@st.cache_resource
+def init_system(_version: str = ""):
+    return _create_scanner()
 
 scanner, loaded_factors = init_system(_version=_CACHE_VERSION)
 
@@ -317,25 +321,33 @@ with col_scan1:
         progress_bar = st.progress(0)
 
         def on_progress(current, total, name):
-            progress_bar.progress(current / total)
-            progress_text.text(f"扫描中 {current}/{total} {name}")
+            if total > 0:
+                progress_bar.progress(current / total)
+                progress_text.text(f"扫描中 {current}/{total} {name}")
 
         with st.spinner("扫描中..."):
-            signals = scanner.scan_market(
-                selected_factors=factor_configs,
-                min_price=min_price,
-                max_price=max_price,
-                min_change=min_change,
-                max_change=max_change,
-                top_n=scan_count,
-                progress_callback=on_progress,
-            )
-            st.session_state["signals"] = signals
+            try:
+                signals = scanner.scan_market(
+                    selected_factors=factor_configs,
+                    min_price=min_price,
+                    max_price=max_price,
+                    min_change=min_change,
+                    max_change=max_change,
+                    top_n=scan_count,
+                    progress_callback=on_progress,
+                )
+                st.session_state["signals"] = signals
+            except TypeError as e:
+                st.error(f"⚠️ 扫描器版本不匹配，请刷新页面（Ctrl+F5）后重试：{e}")
+                signals = []
+            except Exception as e:
+                st.error(f"⚠️ 扫描失败：{e}")
+                signals = []
         progress_bar.empty()
         progress_text.empty()
         if signals:
             st.success(f"✅ 扫描完成，发现 {len(signals)} 只信号股")
-        else:
+        elif "signals" not in st.session_state or not st.session_state.get("signals"):
             st.warning("⚠️ 未发现信号，请检查因子配置或网络连接")
 
 with col_scan2:
@@ -353,16 +365,24 @@ with col_scan2:
             progress_bar = st.progress(0)
 
             def on_progress2(current, total, name):
-                progress_bar.progress(current / total)
-                progress_text.text(f"扫描中 {current}/{total} {name}")
+                if total > 0:
+                    progress_bar.progress(current / total)
+                    progress_text.text(f"扫描中 {current}/{total} {name}")
 
             with st.spinner("扫描自选股..."):
-                signals = scanner.scan_watchlist(
-                    codes,
-                    selected_factors=factor_configs,
-                    progress_callback=on_progress2,
-                )
-                st.session_state["signals"] = signals
+                try:
+                    signals = scanner.scan_watchlist(
+                        codes,
+                        selected_factors=factor_configs,
+                        progress_callback=on_progress2,
+                    )
+                    st.session_state["signals"] = signals
+                except TypeError as e:
+                    st.error(f"⚠️ 扫描器版本不匹配，请刷新页面（Ctrl+F5）后重试：{e}")
+                    signals = []
+                except Exception as e:
+                    st.error(f"⚠️ 扫描失败：{e}")
+                    signals = []
             progress_bar.empty()
             progress_text.empty()
             if signals:
@@ -541,4 +561,4 @@ else:
 
 # ========== 底部 ==========
 st.divider()
-st.caption("QuantScanner v0.2 | 数据源: akshare | 仅供研究参考，不构成投资建议")
+st.caption("QuantScanner v0.3 | 数据源: akshare + 腾讯财经 | 仅供研究参考，不构成投资建议")

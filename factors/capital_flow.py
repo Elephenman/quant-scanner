@@ -36,15 +36,16 @@ class CapitalFlowFactor(FactorBase):
         if pd.isna(value) or value == 0:
             return 0.0, score_to_signal(0.0), "无资金流数据"
 
-        # value_wan单位：万元
+        # 用softsign归一化，以threshold为半饱和点
+        # 当value_wan=threshold时score≈0.5，value_wan=5*threshold时score≈0.83
+        score = value_wan / (threshold + abs(value_wan))
+        score = max(-1.0, min(1.0, score))
+
         if value_wan > threshold:
-            score = min(1.0, value_wan / (threshold * 10))
             detail = f"主力净流入{value_wan:.0f}万，看多"
         elif value_wan < -threshold:
-            score = max(-1.0, value_wan / (threshold * 10))
             detail = f"主力净流出{abs(value_wan):.0f}万，看空"
         else:
-            score = value_wan / (threshold * 5) * 0.3
             detail = f"主力净流入{value_wan:.0f}万，中性"
 
         return score, score_to_signal(score, threshold=0.15), detail

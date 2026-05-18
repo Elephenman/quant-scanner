@@ -329,18 +329,14 @@ def _qq_fetch_all_realtime() -> pd.DataFrame:
 
     if not codes:
         # 最终方案：用代码段范围生成（沪市60xxxx + 深市00xxxx + 创业板30xxxx）
-        codes = []
         for prefix in ("60", "00", "30"):
             for i in range(0, 3000):
                 codes.append(f"{prefix}{i:04d}")
 
-    if not codes:
-        print("[ERROR] 无法获取股票列表")
-        return pd.DataFrame()
-
     # 腾讯接口批量查（每批最多50个）
     batch_size = 50
-    for i in range(0, min(len(codes), 500), batch_size):  # 限制最多500只
+    max_stocks = 2000  # 覆盖主要活跃股
+    for i in range(0, min(len(codes), max_stocks), batch_size):
         batch = codes[i:i + batch_size]
         qq_codes = ",".join(_qq_code_prefix(c) for c in batch)
         try:

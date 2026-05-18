@@ -115,12 +115,8 @@ def load_daily_kline(stock_code: str, days: int = 120) -> pd.DataFrame:
     conn.close()
     if df.empty:
         return df
-    # 统一列名
-    rename_map = {
-        "open": "open", "high": "high", "low": "low", "close": "close",
-        "volume": "volume", "turnover": "turnover", "change_pct": "change_pct",
-    }
-    return df.rename(columns=rename_map)
+    # 列名已经标准（trade_date, open, high, low, close, volume, turnover, change_pct）
+    return df
 
 
 def get_last_trade_date(stock_code: str) -> str:

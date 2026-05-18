@@ -36,15 +36,14 @@ def pre_market_scan():
     """盘前扫描：9:15 集合竞价分析"""
     print(f"[定时] 盘前扫描 {datetime.now()}")
     s = init_scanner()
-    # 只启用竞价相关因子
+    s._ensure_factors()
+    from factors.base import FactorRegistry
+    # 全部因子启用，竞价权重加倍
     factors = {
-        name: {"weight": f.default_weight, "enabled": f.category.value == "竞价面", "params": {}}
-        for name, f in s._ensure_factors() or FactorRegistry.all_factors().items()
+        name: {"weight": f.default_weight * 2 if f.category.value == "竞价面" else f.default_weight,
+               "enabled": True, "params": {}}
+        for name, f in FactorRegistry.all_factors().items()
     }
-    # 全部启用但竞价权重加倍
-    for name, f in FactorRegistry.all_factors().items():
-        if f.category.value == "竞价面":
-            factors[name] = {"weight": f.default_weight * 2, "enabled": True, "params": {}}
     results = s.scan_market(selected_factors=factors, top_n=30)
     print(f"[定时] 盘前扫描完成，发现 {len(results)} 个信号")
     return results
