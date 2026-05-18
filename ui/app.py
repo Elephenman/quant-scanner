@@ -1,26 +1,34 @@
 """
 QuantScanner - A股量化信号扫描器
 主页面：因子选配 + 信号扫描 + 结果展示
-v0.2.2: 双数据源自动降级 + 美化UI + 扫描修复
+v0.3.1: 修复Streamlit热更新缓存旧类导致TypeError
 """
 
 import json
 import sys
 import os
+import importlib
 from datetime import datetime
 
 # 在任何网络请求之前清除代理（Clash TUN会拦截东方财富API）
 for _key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
     os.environ.pop(_key, None)
 
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-
 # 确保项目根目录在 sys.path
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
+
+# ========== 强制重载项目模块 ==========
+# Streamlit热更新时sys.modules缓存旧类，导致TypeError
+# 每次启动强制清除所有项目模块缓存，确保拿到最新代码
+_PROJECT_MODULES = [k for k in sys.modules if k.startswith(('factors.', 'scanner.', 'data.'))]
+for _mod in _PROJECT_MODULES:
+    del sys.modules[_mod]
+
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
 
 from factors.loader import discover_factors, get_all_factors, get_factors_by_category
 from factors.base import FactorRegistry, SignalType, FactorCategory
@@ -157,19 +165,18 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ========== 初始化 ==========
 # 版本号：修改代码后递增此值，强制 Streamlit 重建缓存
-_CACHE_VERSION = "v0.3.0"
-
-def _create_scanner():
-    """创建新的扫描器实例（确保每次代码更新都拿到最新类）"""
-    init_db()
-    loaded = discover_factors()
-    return SignalScanner(), loaded
+_CACHE_VERSION = "v0.3.1"
 
 @st.cache_resource
-def init_system(_version: str = ""):
-    return _create_scanner()
+def _init_shared(_version: str = ""):
+    """缓存数据库和因子发现（这些是无状态的全局资源）"""
+    init_db()
+    loaded = discover_factors()
+    return loaded
 
-scanner, loaded_factors = init_system(_version=_CACHE_VERSION)
+# 每次都重新创建scanner实例，避免缓存旧类导致方法签名不匹配
+loaded_factors = _init_shared(_version=_CACHE_VERSION)
+scanner = SignalScanner()
 
 # ========== 侧边栏：因子选配 ==========
 with st.sidebar:
